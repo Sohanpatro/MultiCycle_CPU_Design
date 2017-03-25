@@ -1,0 +1,463 @@
+GROUP : 16
+NAME- Sohan Patro
+Roll No.- 14CS30044
+##########################################################
+8 general-purpose registers, r0 to r7 (so, 3 bits for specifying the register)
+Memory address is 16-bit
+MAB:- Memory Address Bus
+MDB:- Memory Data Bus
+PC:- Program Counter
+
+4 status flags:
+Z:- Zero flag
+C:- Carry flag
+V:- Overflow flag
+S:- Sign flag
+##########################################################
+Interpretation of each instruction- CPU design from ISA
+*******************************************
+Addressing Modes: 3 bits
+Immediate- 000
+Register-  001
+Base-index- 010
+Base-addressing= 011
+Memory-indirect = 100
+PC Relative = 101 (not required)
+
+Operations hierarchy (using Huffman Coding):
+0- ALU OPERATION 
+	add = 000
+	sub = 001
+	and = 010
+	or  = 011
+	mns = 100
+	cmp = 101
+
+1- Non-Alu operation
+	0 - load or store
+		0 - load
+		1 - store
+		
+	1 - jump, call(jal), return(jr)
+		0 - jump instructions
+			0000 - unconditional jump (j)
+			1000 - jz
+			1001 - jnz
+			1010 - jc
+			1011 - jnc
+			1100 - jv
+			1101 - jnv
+			1110 - jm
+			1111 - jnm
+		1 - call or return
+			0 - call (jal)
+			1 - return (jr)
+		
+		
+*******************************************
+Alu fnSel
+---------
+000 - add (z=x+y)
+001 - sub (z=x-y)
+010 - and (z=x&y)
+011 - or (z=x|y)
+100 - mns (<=> 001 - sub (z=x-y))
+101 - cmp (z=!x)
+110 - tranX (z=x)
+
+Fetch:-
+*******
+	(MAR<-PC, A-bus <- MAR, rdM<-1, IR <- D-bus, regY <- 1);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, LIR = 1, T1 = 1, LregY = 1);
+	(PC<- PC + regY);								//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+
+(Every instruction is first fetch from memory and its execution phase begins. So, for all the following instruction interpretations, the fetch phase is implicitly assumed at the beginning of the RTL interpretation)
+(ALL TRANSFER AND READ SIGNALS- from POSEDGE OF CLOCK;
+ ALL LOAD AND WRITE SIGNALS- from NEGEDGE OF CLOCK (EXCEPT- 'wrM' signal (= 1, from posedge of clock, as memory module has reg type (NOT structural register_16bit module with load signals))))
+*******************************************
+
+Alu operation
+**************
+|opcode(4)|mode(3)|base(3)|index(3)|dest. reg(3)| -> |15--12|11-9|8-6|5-3|2-0|
+|offset / immediate value (16)                  | -> |15--------------------0| (optional depending on the addressing mode)
+========================================================================================================================
+ALUop = {add, sub, and, or} [i.e. similar interpretation for all the 4 operations except the following difference:-	add => + (000), sub => - (001), and => & (010), or  => | (011)]
+aluOp = {000, 001, 010, 011}
+======================================
+1) immediate
+----------------
+|0<aluOp>|000|xxx|xxx|rdst|
+| value               |
+<ALUop>i Rdst, #value [Rdst <- Rdst <ALUop> value]
+	(MAR <- PC, A-bus <- MAR, rdM<-1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- MDR);												// (TMDR2X = 1, LregY = 1);
+	(Reg[IR[Rdst]] <- Reg[IR[Rdst]] <ALUop> regY, Lflag <- 1);	// (rd= 1, selreg = 2, <ALUop> (fnSel = 00), wr = 1 (during negedge of clock), Lflag = 1);
+
+2) register
+--------
+|0<aluOp>|001|rsrc|xxx|rdst|
+<ALUop>r Rdst, Rsrc [Rdst <- Rdst <ALUop> Rsrc]
+	(regY <- Reg[IR[Rsrc]]);									//(rd=1, selreg = 0, LregY = 1);
+	(Reg[IR[Rdst]] <- Reg[IR[Rdst]] <ALUop> regY, Lflag <- 1);	// (rd= 1, selreg = 2, <ALUop> (fnSel = 00), wr = 1 (during negedge of clock), Lflag = 1);
+
+3) base- index
+-----------
+|0<aluOp>|010|rb|rx|rdst|
+|   offset          |
+<ALUop>x Rdst, offset(rb, rx) [Rdst <- Rdst <ALUop> M[rb+rx+offset]]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- Reg[IR[rx]]);										//(rd = 1, selreg = 1, Lregy = 1);
+	(T <- Reg[IR[rb]] + regY);									//(rd = 1, selreg = 0, add (fnSel = 10), LT = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- T + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TT = 1, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(Reg[IR[Rdst]] <- Reg[IR[Rdst]] <ALUop> regY, Lflag <- 1);	//(rd= 1, selreg = 2, <ALUop> (fnSel = 00), wr = 1 (during negedge of clock), Lflag = 1);
+
+4) base- addressing
+-----------
+|0<aluOp>|011|rb|xxx|rdst|
+|   offset           |
+<ALUop>a Rdst, offset(rb) [Rdst <- Rdst <ALUop> M[rb+offset]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- Reg[IR[rb]] + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(rd = 1, selreg = 0, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(Reg[IR[Rdst]] <- Reg[IR[Rdst]] <ALUop> regY, Lflag <- 1);	//(rd= 1, selreg = 2, <ALUop> (fnSel = 00), wr = 1 (during negedge of clock), Lflag = 1);
+
+5) memory-indirect
+-------------
+|0<aluOp>|100|rb|rx|rdst|
+|   offset          |
+<ALUop>n Rdst, @offset(rb, rx) [Rdst <- Rdst <ALUop> M[M[rb+rx+offset]]]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- Reg[IR[rx]]);										//(rd = 1, selreg = 1, Lregy = 1);
+	(T <- Reg[IR[rb]] + regY);									//(rd = 1, selreg = 0, add (fnSel = 10), LT = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- T + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TT = 1, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(MAR <- MDR, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TMDR2X = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LergY = 1);
+	(Reg[IR[Rdst]] <- Reg[IR[Rdst]] <ALUop> regY, Lflag <- 1);	//(rd= 1, selreg = 2, <ALUop> (fnSel = 00), wr = 1 (during negedge of clock), Lflag = 1);
+=====================================================
+
+mns
+===
+21) immediate
+----------------
+|0100|000|xxx|xxx|rdst|
+| value               |
+mnsi Rdst, #value [z <- Rdst - value]
+	(MAR <- PC, A-bus <- MAR, rdM <-1, MDR <- D-bus);				//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, LIR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC<- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- MDR);												// (TMDR2X = 1, LregY = 1);
+	(z <- Reg[IR[Rdst]] - regY, Lflag <- 1);					// (rd= 1, selreg = 2, <Aluop> (fnSel = 00), Lflag = 1);
+
+22) register
+--------
+|0100|001|rsrc|xxx|rdst|
+mnsr Rdst, Rsrc [z <- Rdst - Rsrc]
+	(regY <- Reg[IR[Rsrc]]);									//(rd=1, selreg = 0, LregY = 1);
+	(z <- Reg[IR[Rdst]] - regY, Lflag <- 1);					//(rd= 1, selreg = 2, <Aluop> (fnSel = 00), Lflag = 1);
+
+23) base- index
+-----------
+|0100|010|rb|rx|rdst|
+|   offset          |
+mnsx Rdst, offset(rb, rx) [z <- Rdst - M[rb+rx+offset]]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- Reg[IR[rx]]);										//(rd = 1, selreg = 1, Lregy = 1);
+	(T <- Reg[IR[rb]] + regY);									//(rd = 1, selreg = 0, add (fnSel = 10), LT = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- T + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TT = 1, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LergY = 1);
+	(z <- Reg[IR[Rdst]] - regY, Lflag <- 1);					//(rd= 1, selreg = 2, <ALUop> (fnSel = 00), Lflag = 1);
+
+24) base- addressing
+-----------
+|0100|011|rb|xxx|rdst|
+|   offset          |
+mnsa Rdst, offset(rb) [z <- Rdst - M[rb+offset]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- Reg[IR[rb]] + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(rd = 1, selreg = 0, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(z <- Reg[IR[Rdst]] - regY, Lflag <- 1);					//(rd= 1, selreg = 2, <ALUop> (fnSel = 00), Lflag = 1);
+
+25) memory-indirect
+-------------
+|0100|100|rb|rx|rdst|
+|   offset          |
+mnsn Rdst, @offset(rb, rx) [z <- Rdst - M[M[rb+rx+offset]]]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- Reg[IR[rx]]);										//(rd = 1, selreg = 1, Lregy = 1);
+	(T <- Reg[IR[rb]] + regY);									//(rd = 1, selreg = 0, add (fnSel = 10), LT = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- T + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TT = 1, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(MAR <- MDR, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TMDR2X = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LergY = 1);
+	(z <- Reg[IR[Rdst]] - regY, Lflag <- 1);					//(rd= 1, selreg = 2, <ALUop> (fnSel = 00), Lflag = 1);
+===========================================================
+26) cmp
+=======
+|0101|xxx|xxx|xxx|rdst|
+cmp Rdst [Rdst <- 2's complement of [Rdst]]
+	(Reg[IR[Rdst]] <- !Reg[IR[Rdst]], Lflag <- 1);				//(rd= 1, selreg = 2, <ALUop> (fnSel = 00), wr = 1 (during negedge of clock), Lflag = 1);
+
+*****************************************************************
+LOAD AND STORE
+**************
+|opcode(4)|mode(3)|base(3)|index(3)|reg(3)| -> |15--12|11-9|8-6|5-3|2-0|
+|offset / immediate value (16)            | -> |15--------------------0| (optional depending on the addressing mode)
+====================================================================================================================
+27) load immediate:
+---------------------
+|100x|000|xxx|xxx|rdst(3)|
+|value(16)               |
+li Rdst, #value [Rdst <- value]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);		//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1);											//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);										//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(Rdst <- MDR);											//(TMDR2X = 1, tranX (fnSel = 01), wr = 1 (during negedge of clock));
+
+load register:
+--------------
+|100x|001|rsrc|xxx|rdst|
+lr Rdst, Rsrc [Rdst <- Rsrc]
+	(Reg[IR[Rdst]] <- Reg[IR[Rsrc]]);					//(rd = 1, selreg = 0, tranX (fnSel = 01), wr = 1(clock negedge));
+
+load base-index:
+----------------
+|100x|010|rb(3)|rx(3)|rdst(3)|
+|offset(16)                  |
+lx Rdst, offset(rb, rx) [Rdst <- M[rb+rx+offset]]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- Reg[IR[rx]]);										//(rd = 1, selreg = 1, Lregy = 1);
+	(T <- Reg[IR[rb]] + regY);									//(rd = 1, selreg = 0, add (fnSel = 10), LT = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- T + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TT = 1, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(Reg[IR[Rdst]] <- MDR);										//(TMDR2X = 1, tranX (fnSel = 01), wr = 1);
+
+load base-addressing:
+---------------------
+|100x|011|rb|xxx|rdst|
+|offset              |
+la Rdst, offset(rb) [Rdst <- M[rb+offset]]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- Reg[IR[rb]] + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(rd = 1, selreg = 0, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(Reg[IR[Rdst]] <- MDR);										//(TMDR2X= 1, tranX (fnSel = 01), wr = 1);
+
+31) load mem-indirect:
+----------------------
+|100x|100|rb|rx|rdst|
+|offset             |
+lx Rdst, @offset(rb, rx) [Rdst <- M[M[rb+rx+offset]]]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- Reg[IR[rx]]);										//(rd = 1, selreg = 1, Lregy = 1);
+	(T <- Reg[IR[rb]] + regY);									//(rd = 1, selreg = 0, add (fnSel = 10), LT = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- T + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TT = 1, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(MAR <- MDR, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TMDR2X = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(Reg[IR[Rdst]] <- MDR);										//(TMDR2X= 1, tranX (fnSel = 01), wr = 1);
+
+store base-index:
+----------------
+|101x|010|rb|rx|rsrc|
+|offset             |
+sx offset(rb, rx), Rsrc [M[rb+rx+offset] <- Rsrc]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- Reg[IR[rx]]);										//(rd = 1, selreg = 1, Lregy = 1);
+	(T <- Reg[IR[rb]] + regY);									//(rd = 1, selreg = 0, add (fnSel = 10), LT = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MDR <- Reg[IR[Rsrc]]);										//(rd = 1, selreg = 2, tranX (fnSel = 01), RMDRInt = 1, LMDR = 1);
+	(MAR <- T + regY, A-bus <- MAR, D-bus <- MDR, wrM <- 1);	//(TT = 1, add (fnSel = 10), LMAR = 1, TMAR = 1, TMDR2Ext = 1, wrM = 1);
+
+store base-addressing:
+----------------------
+|101x|011|rb|xxx|rsrc|
+|offset              |
+sa offset(rb), Rsrc [M[rb+offset] <- Rsrc]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);					//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 														//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);													//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- MDR);														//(TMDR2X = 1, LregY = 1);
+	(MDR <- Reg[IR[Rsrc]]);												//(rd = 1, selreg = 2, tranX (fnSel = 01), RMDRInt = 1, LMDR = 1);
+	(MAR <- Reg[IR[rb]] + regY, A-bus <- MAR, D-bus <- MDR, wrM <- 1);	//(rd = 1, selreg = 0, add (fnSel = 10), LMAR = 1, TMAR = 1, TMDR2Ext = 1, wrM = 1);
+	
+
+34) store mem-indirect:
+------------------------
+|101x|100|rb|rx|rsrc|
+|offset             |
+sn @offset(rb, rx), Rsrc [M[M[rb+rx+offset]] <- Rsrc]
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);			//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1); 												//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);											//(TPC = 1 (during posedge of clock), add (fnSel = 10), LPC = 1 (during negedge of clock));
+	(regY <- Reg[IR[rx]]);										//(rd = 1, selreg = 1, Lregy = 1);
+	(T <- Reg[IR[rb]] + regY);									//(rd = 1, selreg = 0, add (fnSel = 10), LT = 1);
+	(regY <- MDR);												//(TMDR2X = 1, LregY = 1);
+	(MAR <- T + regY, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TT = 1, add (fnSel = 10), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(MAR <- MDR);												//(TMDR2X = 1, tranX (fnSel = 01), LMAR = 1);
+	(MDR <- Reg[IR[Rsrc]]);										//(rd = 1, selreg = 2, tranX (fnSel = 01), RMDRInt = 1, LMDR = 1);
+	(A-bus <- MAR, D-bus <- MDR, wrM <- 1);						//(TMAR = 1, TMDR2Ext = 1, wrM = 1);
+
+**************************************************************
+JUMP INSTRUCTIONS:
+******************
+|opcode(3)|cc(4)|xxxxxxxxx| -> |15-13|12--9|8---------0|
+|label(16)                | -> |15--------------------0|
+=============================================================
+35) - 43) j - jnm :-
+|110X|XXX|xxx|xxx|xxx|
+|label  (16)         |
+{j, jz, jnz, jc, jnc, jv, jnv, jm, jnm} lbl
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1);                                      	//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);                                	//(TPC = 1, add (fnSel = 10), LPC = 1);
+	(regY <- MDR);                                    	//(TMDR2X = 1, LregY = 1);
+	if(Dcondn)                                         	//(Controller controls the state depending on the condition flags: Dcondn)
+		(PC <- PC + regY);                            	//(TPC = 1, add (fnSel = 10), LPC = 1);
+/*
+	35) jump(j)-
+	|1100|000|xxx|xxx|xxx|
+	|label(16)           |
+	j lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);										//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);									//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);										//(TMDR2X = 1, LregY = 1);
+		(PC <- PC + regY);									//(TPC = 1, add (fnSel = 10), LPC = 1);
+	
+	36) (jz)-
+	|1101|000|xxx|xxx|xxx|
+	|label               |
+	jz lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);										//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);									//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);										//(TMDR2X = 1, LregY = 1);
+		if(Zout)										//(Controller controls the state depending on the condition flags)
+			(PC <- PC + regY);								//(TPC = 1, add (fnSel = 10), LPC = 1);
+
+	(jnz)-
+	|1101|001|xxx|xxx|xxx|
+	|label               |
+	jnz lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);                                      	//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);                                	//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);                                    	//(TMDR2X = 1, LregY = 1);
+		if(nZout)                                         	//(Controller controls the state depending on the condition flags)
+			(PC <- PC + regY);                            	//(TPC = 1, add (fnSel = 10), LPC = 1);
+
+	(jc)-
+	|1101|010|xxx|xxx|xxx|
+	|label               |
+	jc lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);                                      	//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);                                	//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);                                    	//(TMDR2X = 1, LregY = 1);
+		if(Cout)                                          	//(Controller controls the state depending on the condition flags)
+			(PC <- PC + regY);                            	//(TPC = 1, add (fnSel = 10), LPC = 1);
+
+	(jnc)-
+	|1101|011|xxx|xxx|xxx|
+	|label               |
+	jnc lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);                                      	//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);                                	//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);                                    	//(TMDR2X = 1, LregY = 1);
+		if(nCout)                                         	//(Controller controls the state depending on the condition flags)
+			(PC <- PC + regY);                            	//(TPC = 1, add (fnSel = 10), LPC = 1);
+
+	(jv)-
+	|1101|100|xxx|xxx|xxx|
+	|label               |
+	jv lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);                                      	//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);                                	//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);                                    	//(TMDR2X = 1, LregY = 1);
+		if(Vout)                                          	//(Controller controls the state depending on the condition flags)
+			(PC <- PC + regY);                            	//(TPC = 1, add (fnSel = 10), LPC = 1);
+
+	(jnv)-
+	|1101|101|xxx|xxx|xxx|
+	|label               |
+	jnv lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);                                      	//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);                                	//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);                                    	//(TMDR2X = 1, LregY = 1);
+		if(nVout)                                         	//(Controller controls the state depending on the condition flags)
+			(PC <- PC + regY);                            	//(TPC = 1, add (fnSel = 10), LPC = 1);
+
+	(jm)-
+	|1101|110|xxx|xxx|xxx|
+	|label               |
+	jm lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);                                      	//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);                                	//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);                                    	//(TMDR2X = 1, LregY = 1);
+		if(Sout)                                          	//(Controller controls the state depending on the condition flags)
+			(PC <- PC + regY);                            	//(TPC = 1, add (fnSel = 10), LPC = 1);
+
+	43) (jnm)-
+	|1101|111|xxx|xxx|xxx|
+	|label               |
+	jnm lbl
+		(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+		(regY <- 1);                                      	//(T1 = 1, LregY = 1);
+		(PC <- PC + regY);                                	//(TPC = 1, add (fnSel = 10), LPC = 1);
+		(regY <- MDR);                                    	//(TMDR2X = 1, LregY = 1);
+		if(nSout)                                         	//(Controller controls the state depending on the condition flags)
+			(PC <- PC + regY);                            	//(TPC = 1, add (fnSel = 10), LPC = 1);
+*/
+*****************************************************
+Subroutine call and return: jal (jump and link), jr (jump to return) 
+**************************************************************
+44) jal-
+|opcode(4)|xxxxxxxxx|link register(3)| -> |15--12|11-------3|2-0|
+|subroutine address (16)             | -> |15--------------0|
+=============================================================
+|1110|xxx|xxx|xxx|Rlink(3)|
+|subroutine address(16)|
+jal Rlink, lbl
+	(regY <- 1);										//(T1 = 1, LregY = 1);
+	(Reg[IR[Rlink]] <- PC + regY);						//(TPC = 1, add (fnSel = 10), wr = 1);
+	(MAR <- PC, A-bus <- MAR, rdM <- 1, MDR <- D-bus);	//(TPC = 1, tranX (fnSel = 01), LMAR = 1, TMAR = 1, rdM = 1, RMDRExt = 1, LMDR = 1);
+	(regY <- 1);										//(T1 = 1, LregY = 1);
+	(PC <- PC + regY);									//(TPC = 1, add (fnSel = 10), LPC = 1);
+	(regY <- MDR);										//(TMDR2X = 1, LregY = 1);
+	(PC <- PC + regY);									//(TPC = 1, add (fnSel = 10), LPC = 1);
+-------------------------------------------------------------------------
+45) jr-
+|opcode(4)|xxxxxxxxx|link register(3)| -> |15--12|11-------3|2-0|
+=============================================================
+|1111|xxx|xxx|xxx|Rlink(3)|
+jr Rlink
+	(PC <- Reg[IR[Rlink]]);			//(rd= 1, selreg = 2, tranX (fnSel = 01), LPC = 1 (at clock negedge));
